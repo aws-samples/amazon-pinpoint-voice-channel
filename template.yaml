@@ -7,6 +7,18 @@ Parameters:
     Type: String
     Description: Comma delimitted list of Pinpoint Long Codes.
 
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: amazon-pinpoint-voice-channel
+    Description: Amazon Pinpoint Voice Channel.  This application will place outbound calls triggered by Amazon Pinpoint.
+    Author: Amazon Pinpoint
+    SpdxLicenseId: MIT-0
+    LicenseUrl: LICENSE
+    ReadmeUrl: README.md
+    Labels: ['amazon-pinpoint', 'pinpoint', 'custom-channel', 'voice', 'python']
+    HomePageUrl: https://aws.amazon.com/pinpoint
+    SemanticVersion: 1.0.0
+    SourceCodeUrl: https://github.com/aws-samples/amazon-pinpoint-voice-channel
 
 Resources:
   VoiceSQSQueue:
