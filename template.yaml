@@ -17,18 +17,134 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['amazon-pinpoint', 'pinpoint', 'custom-channel', 'voice', 'python']
     HomePageUrl: https://aws.amazon.com/pinpoint
-    SemanticVersion: 1.0.0
+    SemanticVersion: 1.0.1
     SourceCodeUrl: https://github.com/aws-samples/amazon-pinpoint-voice-channel
 
 Resources:
   VoiceSQSQueue:
     Type: AWS::SQS::Queue
+    DependsOn: "VoiceSQSQueueCMK"
     Properties:
       VisibilityTimeout: 100
       FifoQueue: true
+      KmsMasterKeyId:
+        Ref: VoiceSQSQueueCMK
+      KmsDataKeyReusePeriodSeconds: 600
+
+  PinpointVoiceQueuerFunctionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName:
+        Fn::Sub: "${AWS::Region}-PinpointVoiceQueuerFunctionRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: PinpointVoiceQueuerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteSQS
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: "*"
+
+  PinpointVoiceChannelFunctionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName:
+        Fn::Sub: "${AWS::Region}-PinpointVoiceChannelFunctionRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: PinpointVoiceChannelFunctionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SendVoiceMessage
+                Effect: Allow
+                Action: sms-voice:SendVoiceMessage
+                Resource: !Sub arn:aws:sms-voice:${AWS::Region}:${AWS::AccountId}:/v1/sms-voice/voice/message
+              - Sid: PinpointPutEvents
+                Effect: Allow
+                Action: mobiletargeting:PutEvents
+                Resource: !Sub arn:${AWS::Partition}:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*
+              - Sid: DecryptMessage
+                Effect: Allow
+                Action: ['kms:Decrypt', 'kms:GenerateDataKey']
+                Resource: "*"
+
+  VoiceSQSQueueCMK:
+    Type: "AWS::KMS::Key"
+    DependsOn:
+      - "PinpointVoiceQueuerFunctionRole"
+      - "PinpointVoiceChannelFunctionRole"
+    Properties:
+      Description: 'CMK used for encryption/decryption of queue VoiceSQSQueue.'
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: VoiceSQSQueueCMK'
+        Statement:
+          -
+            Sid: 'Allow administration of the key'
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+            Resource: '*'
+          -
+            Sid: 'Allow use of the key'
+            Effect: Allow
+            Principal:
+              AWS:
+                - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::Region}-PinpointVoiceQueuerFunctionRole"
+                - Fn::Sub: "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::Region}-PinpointVoiceChannelFunctionRole"
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: '*'
 
   PinpointVoiceQueuerFunction:
     Type: AWS::Serverless::Function
+    DependsOn: "VoiceSQSQueueCMK"
     Properties:
       FunctionName: AmazonPinpointVoiceChannel
       CodeUri: voicequeuer/
@@ -39,12 +155,7 @@ Resources:
         Variables:
           SQS_QUEUE_URL: !Ref VoiceSQSQueue
           PINPOINT_LONG_CODES: !Ref PINPOINTLONGCODES
-      Policies:
-        - Statement:
-          - Sid: WriteSQS
-            Effect: Allow
-            Action: sqs:SendMessage
-            Resource: !GetAtt VoiceSQSQueue.Arn
+      Role: !GetAtt PinpointVoiceQueuerFunctionRole.Arn
 
 
   PinpointVoiceChannelFunction:
@@ -62,16 +173,7 @@ Resources:
           Properties:
             Queue: !GetAtt VoiceSQSQueue.Arn
             BatchSize: 10
-      Policies:
-        - Statement:
-          - Sid: SendVoiceMessage
-            Effect: Allow
-            Action: sms-voice:SendVoiceMessage
-            Resource: !Sub arn:aws:sms-voice:${AWS::Region}:${AWS::AccountId}:/v1/sms-voice/voice/message
-          - Sid: PinpointPutEvents
-            Effect: Allow
-            Action: mobiletargeting:PutEvents
-            Resource: !Sub arn:${AWS::Partition}:mobiletargeting:${AWS::Region}:${AWS::AccountId}:*
+      Role: !GetAtt PinpointVoiceChannelFunctionRole.Arn
 
 
   PinpointInvokePermission:
